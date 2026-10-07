@@ -1,7 +1,6 @@
 import random
 import pygame
-from game.block import Block
-
+from game.block import Block, Debris
 
 class GameEngine:
     def __init__(self, width, height):
@@ -9,6 +8,12 @@ class GameEngine:
         self.height = height
         self.block_height = 28
         self.base_width = 180
+
+        self.perfect_tolerance = 5
+        self.perfect_streak = 0
+        self.perfect_message = ""
+        self.perfect_message_timer = 0
+        self.debris = []
 
         self.font_title = pygame.font.SysFont(None, 38)
         self.font_hud = pygame.font.SysFont(None, 28)
@@ -31,6 +36,11 @@ class GameEngine:
         self.score = 0
         self.game_over = False
 
+        self.perfect_streak = 0
+        self.perfect_message = ""
+        self.perfect_message_timer = 0
+        self.debris = []
+
         base_x = (self.width - self.base_width) // 2
         base_y = self.height - 60
         base_block = Block(base_x, base_y, self.base_width, self.block_height, self.get_color(0), speed=0)
@@ -46,7 +56,6 @@ class GameEngine:
 
         start_x = 25 if random.choice([True, False]) else self.width - 25 - top_block.width
         self.active_block = Block(start_x, next_y, top_block.width, self.block_height, color, speed=speed)
-
     def drop_block(self):
         if self.game_over:
             return
@@ -55,23 +64,94 @@ class GameEngine:
         act = self.active_block
 
         left = max(act.x, top_block.x)
-        right = min(act.x + act.width, top_block.x + top_block.width)
+        right = min(
+            act.x + act.width,
+            top_block.x + top_block.width
+        )
+
         overlap = right - left
-        
-        is_successful_drop = overlap <= 0
-        
+
+        is_successful_drop = overlap > 0
+
+        is_perfect = (
+            abs(act.x - top_block.x) <= self.perfect_tolerance
+            and abs(act.width - top_block.width) <= self.perfect_tolerance
+        )
+
         if is_successful_drop:
-            trimmed_width = max(10.0, overlap)
-            new_block = Block(left, act.y, trimmed_width, self.block_height, act.color, speed=0)
+
+            if is_perfect:
+                new_x = top_block.x
+                trimmed_width = top_block.width
+
+                self.perfect_streak += 1
+
+                bonus = 1 + self.perfect_streak
+                self.score += bonus
+
+                self.perfect_message = f"PERFECT! +{bonus}"
+                self.perfect_message_timer = 60
+
+            else:
+                new_x = left
+                trimmed_width = max(10.0, overlap)
+
+                self.perfect_streak = 0
+                self.score += 1
+
+                # Create falling debris from the unused part
+                if act.x < top_block.x:
+                    debris_width = top_block.x - act.x
+
+                    debris = Debris(
+                        act.x + debris_width / 2,
+                        act.y + self.block_height / 2,
+                        debris_width,
+                        self.block_height,
+                        act.color,
+                        vx=-2.5,
+                        vy=-1.5
+                    )
+
+                    self.debris.append(debris)
+
+                elif act.x + act.width > top_block.x + top_block.width:
+                    debris_width = (
+                        act.x + act.width
+                        - (top_block.x + top_block.width)
+                    )
+
+                    debris = Debris(
+                        top_block.x + top_block.width + debris_width / 2,
+                        act.y + self.block_height / 2,
+                        debris_width,
+                        self.block_height,
+                        act.color,
+                        vx=2.5,
+                        vy=-1.5
+                    )
+
+                    self.debris.append(debris)
+
+            new_block = Block(
+                new_x,
+                act.y,
+                trimmed_width,
+                self.block_height,
+                act.color,
+                speed=0
+            )
+
             self.stack.append(new_block)
-            self.score += 1
 
             if new_block.y < 180:
                 shift_amount = self.block_height + 4
+
                 for b in self.stack:
                     b.y += shift_amount
 
             self.spawn_active_block()
+
         else:
             self.game_over = True
 
@@ -91,17 +171,68 @@ class GameEngine:
         if not self.game_over:
             self.active_block.update(self.width)
 
-    def render(self, screen):
-        screen.fill((24, 27, 36))
+        # Update debris
+        for debris in self.debris:
+            debris.update()
 
+        # Remove debris after its lifetime expires
+        self.debris = [
+            debris
+            for debris in self.debris
+            if debris.life > 0
+        ]
+
+        if self.perfect_message_timer > 0:
+            self.perfect_message_timer -= 1
+        else:
+            self.perfect_message = ""
+            
+    def render(self, screen):
+        # Atmospheric background changes as the tower grows
+        sky_shift = min(80, self.score * 2)
+
+        background = (
+            24 + sky_shift // 3,
+            27 + sky_shift // 4,
+            36 + sky_shift
+        )
+
+        screen.fill(background)
+            
         title_surf = self.font_title.render("Skyscraper Stack", True, (245, 245, 245))
         screen.blit(title_surf, (self.width // 2 - title_surf.get_width() // 2, 16))
 
-        score_surf = self.font_hud.render(f"Height: {self.score}", True, (255, 220, 80))
-        screen.blit(score_surf, (self.width // 2 - score_surf.get_width() // 2, 54))
+        score_surf = self.font_hud.render(
+            f"Height: {self.score}",
+            True,
+            (255, 220, 80)
+        )
+
+        screen.blit(
+            score_surf,
+            (self.width // 2 - score_surf.get_width() // 2, 54)
+        )
+
+        if self.perfect_message:
+            perfect_surf = self.font_big.render(
+                self.perfect_message,
+                True,
+                (255, 220, 80)
+            )
+
+            screen.blit(
+                perfect_surf,
+                (
+                    self.width // 2 - perfect_surf.get_width() // 2,
+                    100
+                )
+            )
 
         for b in self.stack:
             b.render(screen)
+
+        for debris in self.debris:
+            debris.render(screen)
 
         if not self.game_over:
             self.active_block.render(screen)
